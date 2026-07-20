@@ -1,0 +1,14 @@
+[package]
+name = "exhaustive-predecessor-searcher"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "eps"
+path = "src/main.rs"
+
+[dependencies]
+bitflags = "2.13.1"
+clap = { version = "4.6.2", features = ["derive"] }
+rand = "0.10.2"
+rayon = "1.12.0"

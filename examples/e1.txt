@@ -1,0 +1,2 @@
+x = 9, y = 10, rule = LifeHistory
+3$3.2A$2.A.A$2.A$.2A!
