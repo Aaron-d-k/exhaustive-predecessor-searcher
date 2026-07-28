@@ -29,13 +29,13 @@ use crate::stats::print_viz_fracs;
 #[command(version, about)]
 struct Cli {
     #[arg(short, long, default_value_t = 1)]
-    verbosity: u8,
+    verbosity: i32,
 
-    #[arg(short, long, default_value = "b3s23")]
-    rule: String,
+    #[arg(short, long, value_name="FILE", default_value = concat!(env!("CARGO_MANIFEST_DIR"),"/b3s23.cfg"))]
+    cfg_file: PathBuf,
 
-    #[arg(long, value_enum, default_value_t = Mode::KeepHighScore)]
-    mode: Mode,
+    #[arg(long, value_enum, default_value_t = Mode::KeepHighCost)]
+    cull_mode: Mode,
 
     #[arg(long, default_value_t = 0.1)]
     cullfrac: f64,
@@ -47,14 +47,14 @@ struct Cli {
 #[derive(ValueEnum, Clone, Debug)]
 enum Mode {
     Exhaustive,
-    KeepHighScore,
+    KeepHighCost,
     KeepRandom,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     DeepSearch {
-        #[arg(short, long, default_value_t = 1)]
+        #[arg(short, long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(0..=2))]
         gens: u32,
 
         #[arg(short, long, value_name = "FILE")]
@@ -74,7 +74,7 @@ enum Commands {
         inputfile: PathBuf,
 
         #[arg(short, long, value_name = "FILE")]
-        outputtemplate: Option<PathBuf>,
+        templateoutput: Option<PathBuf>,
 
         #[arg(short, long, value_name = "FILE", default_value = "preds.txt")]
         outputfile: PathBuf,
@@ -105,7 +105,7 @@ pub fn parse_file_rle(f: &PathBuf) -> Grid<char> {
 fn main() {
     let args = Cli::parse();
 
-    let rule_lut = RuleLut::new(&args.rule);
+    let rule_lut = RuleLut::from_cfg(&fs::read_to_string(&args.cfg_file).unwrap());
 
     match args.command {
         DeepSearch {
@@ -132,7 +132,7 @@ fn main() {
         }
         Commands::ExhaustiveSearch {
             ref inputfile,
-            ref outputtemplate,
+            ref templateoutput,
             ref outputfile,
             limit_patterns_midlayer,
             limit_patterns_finallayer,
@@ -144,7 +144,7 @@ fn main() {
                 _ => None,
             });
 
-            let o_template = outputtemplate
+            let o_template = templateoutput
                 .as_ref()
                 .map(|x| {
                     parse_file_rle(x).map(|x| match x {
@@ -170,9 +170,9 @@ fn main() {
 }
 
 fn makecfg(plim: usize, args: &Cli) -> CombinerCfg {
-    match args.mode {
+    match args.cull_mode {
         Mode::Exhaustive => CombinerCfg::Exhaustive,
-        Mode::KeepHighScore => CombinerCfg::KeepHighScore {
+        Mode::KeepHighCost => CombinerCfg::KeepHighCost {
             patt_limit: plim,
             cullfrac: args.cullfrac,
         },
@@ -214,19 +214,29 @@ fn exhaustive_main(
 
     for d in (1..=bw.min_leaf_depth()).rev() {
         eprintln!("Combining to depth {} ", d);
-        search::fill_combinations(&mut bw, d, &makecfg(limit_patterns_midlayer, args), 1);
+        search::fill_combinations(
+            &mut bw,
+            d,
+            &makecfg(limit_patterns_midlayer, args),
+            args.verbosity,
+        );
 
         eprintln!("Starting culling depth {d} ");
-        search::extract_and_cull(&mut bw, d, 0.01, 1).unwrap();
+        search::extract_and_cull(&mut bw, d, 0.01, args.verbosity).unwrap();
         bw.free_caches(d as i32);
 
         if cull_high_pop {
-            search::extract_and_cull_lowscore(&mut bw, d, 1).unwrap()
+            search::extract_and_cull_lowcost(&mut bw, d, args.verbosity).unwrap()
         };
     }
 
     eprintln!("Finishing up...");
-    search::fill_combinations(&mut bw, 0, &makecfg(limit_patterns_finallayer, args), 1);
+    search::fill_combinations(
+        &mut bw,
+        0,
+        &makecfg(limit_patterns_finallayer, args),
+        args.verbosity,
+    );
     let nboard = bw.get_num_valid_boards().unwrap();
     eprintln!("Number of solutions found: {nboard}");
     let mut of = File::create(of).unwrap();
@@ -296,15 +306,25 @@ fn deep_main(
 
         for d in (1..=bw.min_leaf_depth()).rev() {
             eprintln!("Combining to depth {} ", d);
-            search::fill_combinations(&mut bw, d, &makecfg(limit_patterns_midlayer, args), 1);
+            search::fill_combinations(
+                &mut bw,
+                d,
+                &makecfg(limit_patterns_midlayer, args),
+                args.verbosity,
+            );
 
             eprintln!("Starting culling depth {d} ");
-            search::extract_and_cull(&mut bw, d, 0.01, 1).unwrap();
+            search::extract_and_cull(&mut bw, d, 0.01, args.verbosity).unwrap();
             bw.free_caches(d as i32);
-            search::extract_and_cull_lowscore(&mut bw, d, 1).unwrap();
+            search::extract_and_cull_lowcost(&mut bw, d, args.verbosity).unwrap();
         }
         eprintln!("Finishing up...");
-        search::fill_combinations(&mut bw, 0, &makecfg(limit_patterns_finallayer, args), 1);
+        search::fill_combinations(
+            &mut bw,
+            0,
+            &makecfg(limit_patterns_finallayer, args),
+            args.verbosity,
+        );
         let nboard = bw.get_num_valid_boards().unwrap();
         eprintln!("Number of solutions found: {nboard}");
 
@@ -332,27 +352,20 @@ fn deep_main(
                     bw.extract_board(i).unwrap().to_plaintext()
                 )
             }
-            bw.build_score_cache();
+            bw.build_cost_cache();
             let index_of_best = top_k_indices(
                 &(0..nboard)
                     .into_iter()
-                    .map(|i| bw.get_score(i).unwrap())
+                    .map(|i| bw.get_cost(i).unwrap())
                     .collect::<Vec<_>>(),
-                10,
+                2,
             );
             current_candidates = index_of_best
                 .iter()
                 .map(|&i| bw.extract_board(i as u64).unwrap().without_border(1))
                 .collect();
-            current_candidates.sort_by_cached_key(|g| {
-                g.data
-                    .iter()
-                    .map(|&c| {
-                        let c: u8 = c.into();
-                        c as u32
-                    })
-                    .sum::<u32>()
-            });
+            current_candidates
+                .sort_by_cached_key(|g| g.data.iter().map(|&c| c.into_u8() as u32).sum::<u32>());
             input_num = 0;
             border_size = 0;
             start_side = Direction::Up;

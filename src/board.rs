@@ -31,7 +31,7 @@ pub struct BoardWindow {
     // get_exposure per comparison (the hot path), and lets the sort extract each key
     // exactly once instead of O(n log n) times.
     exposure_sort_order_cache: [Option<Vec<(PackedCellsUnderlying, u64)>>; 4],
-    score_cache: Option<Vec<i32>>,
+    cost_cache: Option<Vec<i32>>,
 }
 
 impl BoardWindow {
@@ -43,7 +43,7 @@ impl BoardWindow {
                 forced_dead,
                 exposure_cache: [const { None }; 4],
                 exposure_sort_order_cache: [const { None }; 4],
-                score_cache: None,
+                cost_cache: None,
             };
         }
 
@@ -107,7 +107,7 @@ impl BoardWindow {
             forced_dead,
             exposure_cache: [const { None }; 4],
             exposure_sort_order_cache: [const { None }; 4],
-            score_cache: None,
+            cost_cache: None,
         }
     }
 
@@ -300,7 +300,7 @@ impl BoardWindow {
         valid_combos
     }
 
-    pub fn cull_badscore_tillmatch(
+    pub fn cull_badcost_tillmatch(
         b1: &mut BoardWindow,
         direction: Direction,
         b2: &mut BoardWindow,
@@ -353,8 +353,8 @@ impl BoardWindow {
                 );
             }
             // time to eliminate
-            b1.cull_worst_scores((order1.len() as f64 * (1. - percull_frac)) as usize);
-            b2.cull_worst_scores((order2.len() as f64 * (1. - percull_frac)) as usize);
+            b1.cull_worst_costs((order1.len() as f64 * (1. - percull_frac)) as usize);
+            b2.cull_worst_costs((order2.len() as f64 * (1. - percull_frac)) as usize);
         }
     }
 
@@ -476,13 +476,13 @@ impl BoardWindow {
         b2.retain_valid_boards(&keep2);
     }
 
-    pub fn cull_worst_scores(&mut self, to_retain: usize) -> Option<()> {
+    pub fn cull_worst_costs(&mut self, to_retain: usize) -> Option<()> {
         if to_retain as u64 >= self.get_num_valid_boards()? {
             return Some(());
         }
-        self.build_score_cache();
+        self.build_cost_cache();
         let mut pops = self
-            .score_cache
+            .cost_cache
             .as_deref()?
             .iter()
             .copied()
@@ -537,8 +537,8 @@ impl BoardWindow {
             }
         }
 
-        // Compact the score cache
-        if let Some(cache) = &mut self.score_cache {
+        // Compact the cost cache
+        if let Some(cache) = &mut self.cost_cache {
             *cache = cache
                 .iter()
                 .zip(keep.iter())
@@ -571,8 +571,8 @@ impl BoardWindow {
         }
     }
 
-    pub fn get_score(&self, i: u64) -> Option<i32> {
-        if let Some(cache) = &self.score_cache {
+    pub fn get_cost(&self, i: u64) -> Option<i32> {
+        if let Some(cache) = &self.cost_cache {
             return Some(cache[i as usize]);
         }
 
@@ -583,7 +583,7 @@ impl BoardWindow {
                 valid_combos: Some(valid_combos),
             } => {
                 let (i1, i2) = valid_combos[i as usize];
-                Some(left.get_score(i1)? + right.get_score(i2)?)
+                Some(left.get_cost(i1)? + right.get_cost(i2)?)
             }
             BoardWindowData::SplitVertical {
                 top,
@@ -591,14 +591,14 @@ impl BoardWindow {
                 valid_combos: Some(valid_combos),
             } => {
                 let (i1, i2) = valid_combos[i as usize];
-                Some(top.get_score(i1)? + bottom.get_score(i2)?)
+                Some(top.get_cost(i1)? + bottom.get_cost(i2)?)
             }
             _ => None,
         }
     }
 
-    pub fn build_score_cache(&mut self) {
-        if self.score_cache.is_some() {
+    pub fn build_cost_cache(&mut self) {
+        if self.cost_cache.is_some() {
             return;
         }
 
@@ -606,16 +606,16 @@ impl BoardWindow {
             let mut cache = vec![0; num_boards as usize];
 
             for i in 0..num_boards {
-                if let Some(exposure) = self.get_score(i) {
+                if let Some(exposure) = self.get_cost(i) {
                     cache[i as usize] = exposure;
                 }
             }
-            self.score_cache = Some(cache);
+            self.cost_cache = Some(cache);
         }
     }
 
     // removes all high pop but equivalent
-    pub fn remove_degenerate_lowscore(&mut self) -> Option<()> {
+    pub fn remove_degenerate_lowcost(&mut self) -> Option<()> {
         const DIRECS: [Direction; 4] = [
             Direction::Up,
             Direction::Down,
@@ -625,8 +625,8 @@ impl BoardWindow {
         for d in DIRECS {
             self.build_exposure_cache(d);
         }
-        self.build_score_cache();
-        let pops = self.score_cache.as_deref()?;
+        self.build_cost_cache();
+        let pops = self.cost_cache.as_deref()?;
 
         let nboard = self.get_num_valid_boards()? as usize;
         let mut tosort = vec![([PackedCells::ALL_DEAD; 4], 0); nboard];
@@ -733,46 +733,35 @@ impl BoardWindow {
             rect: Rect { top, left, .. },
             inner,
             forced_dead,
-            score_cache,
+            cost_cache,
             ..
         } = self;
         match inner {
             BoardWindowData::Leaf { valid_boards } => {
-                let mut candidates = Vec::new();
-                let mut candidates_scores = Vec::new();
-                let neighs_to_consider = if let &Some(gen1c) = gen1.get((*left, *top).into()) {
-                    rule_lut.get_pred(gen1c)
-                } else {
-                    &(0..512)
-                        .into_iter()
-                        .map(|x| PackedCells(x))
-                        .collect::<Vec<_>>()
-                };
+                let p = (*left, *top).into();
+                let mut candidates = vec![];
+                let mut candidates_costs = vec![];
 
-                let gen0c = *gen0.get((*left, *top).into());
-
-                for &pred in neighs_to_consider {
+                for cand in rule_lut.filter_pieces(*gen0.get(p), *gen1.get(p), p) {
                     if forced_dead.iter().all(|d| {
                         let d = d.to_single().unwrap();
                         let x33 = Rect::new(0, 0, 3, 3);
                         let x23 = x33.trim(d.opposite(), 1);
                         let x13 = x33.trim(d, 2);
-                        pred.trim(x33, d.opposite(), 2) == PackedCells::ALL_DEAD
-                            && rule_lut.evolve(pred.trim(x33, d.opposite(), 1).join(
+                        cand.0.trim(x33, d.opposite(), 2) == PackedCells::ALL_DEAD
+                            && rule_lut.evolve(cand.0.trim(x33, d.opposite(), 1).join(
                                 PackedCells::ALL_DEAD,
                                 x23,
                                 x13,
                                 d.opposite(),
-                            )) == CACell::DEAD
-                    }) && gen0c.map_or(true, |x| {
-                        <CACell as Into<u8>>::into(x) == ((pred.0 >> 4) & 1) as u8
+                            )) == Some(CACell::DEAD)
                     }) {
-                        candidates.push(pred);
-                        candidates_scores.push(rule_lut.get_score(&pred, rule_lut.evolve(pred)));
+                        candidates.push(cand.0);
+                        candidates_costs.push(cand.1);
                     }
                 }
                 *valid_boards = Some(candidates);
-                *score_cache = Some(candidates_scores);
+                *cost_cache = Some(candidates_costs);
             }
             BoardWindowData::SplitHorizontal { left, right, .. } => {
                 left.fill_leaves(rule_lut, gen0, gen1)?;

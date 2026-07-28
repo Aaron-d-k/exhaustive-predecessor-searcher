@@ -10,7 +10,7 @@ fn get_npatt_log<'a>(boards: impl Iterator<Item = &'a BoardWindow>) -> Option<f6
     Some(npatt_log)
 }
 
-pub fn extract_and_cull_lowscore(
+pub fn extract_and_cull_lowcost(
     board: &mut BoardWindow,
     depth: usize,
     verbosity: i32,
@@ -18,7 +18,7 @@ pub fn extract_and_cull_lowscore(
     let mut g = board.extract_grid_at_depth(depth)?;
     g.data
         .par_iter_mut()
-        .try_for_each(|b| b.remove_degenerate_lowscore())?;
+        .try_for_each(|b| b.remove_degenerate_lowcost())?;
     if verbosity > 0 {
         eprintln!(
             "New log_10(patterns) after culling highpop duplicates -- {}",
@@ -76,7 +76,7 @@ pub fn extract_and_cull(
 
 pub enum CombinerCfg {
     Exhaustive,
-    KeepHighScore { patt_limit: usize, cullfrac: f64 },
+    KeepHighCost { patt_limit: usize, cullfrac: f64 },
     KeepRandom { patt_limit: usize },
 }
 
@@ -128,10 +128,10 @@ pub fn fill_all_combinations(board: &mut BoardWindow, cfg: &CombinerCfg, verbosi
                     BoardWindow::match_exposures(left, Direction::Right, right, None, verbosity)
                         .unwrap()
                 }
-                CombinerCfg::KeepHighScore {
+                CombinerCfg::KeepHighCost {
                     patt_limit,
                     cullfrac,
-                } => BoardWindow::cull_badscore_tillmatch(
+                } => BoardWindow::cull_badcost_tillmatch(
                     left,
                     Direction::Right,
                     right,
@@ -169,10 +169,10 @@ pub fn fill_all_combinations(board: &mut BoardWindow, cfg: &CombinerCfg, verbosi
                     BoardWindow::match_exposures(top, Direction::Down, bottom, None, verbosity)
                         .unwrap()
                 }
-                CombinerCfg::KeepHighScore {
+                CombinerCfg::KeepHighCost {
                     patt_limit,
                     cullfrac,
-                } => BoardWindow::cull_badscore_tillmatch(
+                } => BoardWindow::cull_badcost_tillmatch(
                     top,
                     Direction::Down,
                     bottom,
@@ -259,7 +259,7 @@ pub mod exhaustive {
         for y in -1..=N {
             for x in -1..=N {
                 let on_ring = x == -1 || x == N || y == -1 || y == N;
-                if on_ring && rule.evolve(neighborhood(p, x, y)) == CACell::ALIVE {
+                if on_ring && rule.evolve(neighborhood(p, x, y)).unwrap() == CACell::ALIVE {
                     return None;
                 }
             }
@@ -267,7 +267,7 @@ pub mod exhaustive {
         let mut t = 0u32;
         for y in 0..N {
             for x in 0..N {
-                if rule.evolve(neighborhood(p, x, y)) == CACell::ALIVE {
+                if rule.evolve(neighborhood(p, x, y)).unwrap() == CACell::ALIVE {
                     t |= 1 << (y * N + x);
                 }
             }
@@ -408,7 +408,7 @@ pub mod exhaustive {
     /// Overridable count via `EXHAUSTIVE_SAMPLE` (default 40).
     #[test]
     fn exhaustive_5x5_sample() {
-        let rule = RuleLut::new("B3/S23");
+        let rule = RuleLut::cost_as_population_from_rule("B3S23");
         let truth = build_ground_truth(&rule);
         assert!(!truth.is_empty(), "ground truth should be non-empty");
 
@@ -469,7 +469,7 @@ pub mod exhaustive {
     #[test]
     #[ignore]
     fn exhaustive_5x5_all() {
-        let rule = RuleLut::new("B3/S23");
+        let rule = RuleLut::cost_as_population_from_rule("B3S23");
         let truth = build_ground_truth(&rule);
         eprintln!("verifying all {} achievable targets", truth.len());
 
