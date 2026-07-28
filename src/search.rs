@@ -76,7 +76,7 @@ pub fn extract_and_cull(
 
 pub enum CombinerCfg {
     Exhaustive,
-    KeepHighCost { patt_limit: usize, cullfrac: f64 },
+    KeepLowCost { patt_limit: usize, cullfrac: f64 },
     KeepRandom { patt_limit: usize },
 }
 
@@ -128,7 +128,7 @@ pub fn fill_all_combinations(board: &mut BoardWindow, cfg: &CombinerCfg, verbosi
                     BoardWindow::match_exposures(left, Direction::Right, right, None, verbosity)
                         .unwrap()
                 }
-                CombinerCfg::KeepHighCost {
+                CombinerCfg::KeepLowCost {
                     patt_limit,
                     cullfrac,
                 } => BoardWindow::cull_badcost_tillmatch(
@@ -169,7 +169,7 @@ pub fn fill_all_combinations(board: &mut BoardWindow, cfg: &CombinerCfg, verbosi
                     BoardWindow::match_exposures(top, Direction::Down, bottom, None, verbosity)
                         .unwrap()
                 }
-                CombinerCfg::KeepHighCost {
+                CombinerCfg::KeepLowCost {
                     patt_limit,
                     cullfrac,
                 } => BoardWindow::cull_badcost_tillmatch(

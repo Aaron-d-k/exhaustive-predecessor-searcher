@@ -28,13 +28,13 @@ use crate::stats::print_viz_fracs;
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    #[arg(short, long, default_value_t = 1)]
+    #[arg(short, long, default_value_t = 1, value_parser = clap::value_parser!(i32).range(-1..=2))]
     verbosity: i32,
 
     #[arg(short, long, value_name="FILE", default_value = concat!(env!("CARGO_MANIFEST_DIR"),"/b3s23.cfg"))]
     cfg_file: PathBuf,
 
-    #[arg(long, value_enum, default_value_t = Mode::KeepHighCost)]
+    #[arg(long, value_enum, default_value_t = Mode::KeepLowCost)]
     cull_mode: Mode,
 
     #[arg(long, default_value_t = 0.1)]
@@ -47,14 +47,15 @@ struct Cli {
 #[derive(ValueEnum, Clone, Debug)]
 enum Mode {
     Exhaustive,
-    KeepHighCost,
+    KeepLowCost,
     KeepRandom,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(about="Tries to search for a n-gen predecessor, using the given heuristic (default: low population) to choose the best predecessor.")]
     DeepSearch {
-        #[arg(short, long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(0..=2))]
+        #[arg(short, long, default_value_t = 1)]
         gens: u32,
 
         #[arg(short, long, value_name = "FILE")]
@@ -69,6 +70,7 @@ enum Commands {
         #[arg(short = 'f', long, default_value_t = 1000000)]
         limit_patterns_finallayer: usize,
     },
+    #[command(about="Tries to search for every 1-gen predecessor, using the given heuristic to sort predecessors.")]
     ExhaustiveSearch {
         #[arg(short, long, value_name = "FILE")]
         inputfile: PathBuf,
@@ -86,6 +88,7 @@ enum Commands {
         limit_patterns_finallayer: usize,
 
         #[arg(long, default_value_t = false)]
+        /// Makes the search faster by eliminating certain boards with duplicate behaviour. This makes the search non-exhaustive, but it will still never miss a solution as long as at least one exists.
         cull_high_pop: bool,
     },
 }
@@ -172,7 +175,7 @@ fn main() {
 fn makecfg(plim: usize, args: &Cli) -> CombinerCfg {
     match args.cull_mode {
         Mode::Exhaustive => CombinerCfg::Exhaustive,
-        Mode::KeepHighCost => CombinerCfg::KeepHighCost {
+        Mode::KeepLowCost => CombinerCfg::KeepLowCost {
             patt_limit: plim,
             cullfrac: args.cullfrac,
         },
@@ -190,20 +193,21 @@ fn exhaustive_main(
     cull_high_pop: bool,
     args: &Cli,
 ) {
-    eprintln!(
-        "Dimensions: {}x{}",
-        input_patt.size.width(),
-        input_patt.size.height()
-    );
-    eprintln!("\nParsed Grid:");
-    let pfn = |x: &Option<CACell>| match *x {
-        None => '?',
-        Some(CACell::ALIVE) => '*',
-        Some(CACell::DEAD) => '.',
-    };
-    eprintln!("{}", input_patt.to_plaintext_generic(pfn));
-    eprintln!("{}", o_template.to_plaintext_generic(pfn));
-
+    if args.verbosity > 0 {
+        eprintln!(
+            "Dimensions: {}x{}",
+            input_patt.size.width(),
+            input_patt.size.height()
+        );
+        eprintln!("\nParsed Grid:");
+        let pfn = |x: &Option<CACell>| match *x {
+            None => '?',
+            Some(CACell::ALIVE) => '*',
+            Some(CACell::DEAD) => '.',
+        };
+        eprintln!("{}", input_patt.to_plaintext_generic(pfn));
+        eprintln!("{}", o_template.to_plaintext_generic(pfn));
+    }
     let mut bw = BoardWindow::new(
         input_patt.size,
         Directions::all(),
@@ -213,7 +217,7 @@ fn exhaustive_main(
     bw.fill_leaves(&rule_lut, o_template, input_patt);
 
     for d in (1..=bw.min_leaf_depth()).rev() {
-        eprintln!("Combining to depth {} ", d);
+        if args.verbosity > 0 {eprintln!("Combining to depth {} ", d);}
         search::fill_combinations(
             &mut bw,
             d,
@@ -221,7 +225,7 @@ fn exhaustive_main(
             args.verbosity,
         );
 
-        eprintln!("Starting culling depth {d} ");
+        if args.verbosity > 0 {eprintln!("Starting culling depth {d} ");}
         search::extract_and_cull(&mut bw, d, 0.01, args.verbosity).unwrap();
         bw.free_caches(d as i32);
 
@@ -230,7 +234,7 @@ fn exhaustive_main(
         };
     }
 
-    eprintln!("Finishing up...");
+    if args.verbosity > 0 {eprintln!("Finishing up...");}
     search::fill_combinations(
         &mut bw,
         0,
@@ -277,7 +281,7 @@ fn deep_main(
         }
         let curr_patt = curr_patt;
 
-        eprintln!(
+        if args.verbosity > 1 {eprintln!(
             "Elapsed time: {}s, Gens Left: {gens_left}",
             SystemTime::now()
                 .duration_since(starttime)
@@ -289,8 +293,9 @@ fn deep_main(
             curr_patt.size.width(),
             curr_patt.size.height()
         );
-        eprintln!("\nParsed Grid:");
-        eprintln!("{}", curr_patt.to_plaintext());
+        }
+        if args.verbosity > 0 {eprintln!("\nParsed Grid:");
+        eprintln!("{}", curr_patt.to_plaintext());}
 
         let mut bw = BoardWindow::new(
             curr_patt.size,
@@ -305,7 +310,7 @@ fn deep_main(
         );
 
         for d in (1..=bw.min_leaf_depth()).rev() {
-            eprintln!("Combining to depth {} ", d);
+            if args.verbosity > 0 { eprintln!("Combining to depth {} ", d);}
             search::fill_combinations(
                 &mut bw,
                 d,
@@ -313,12 +318,12 @@ fn deep_main(
                 args.verbosity,
             );
 
-            eprintln!("Starting culling depth {d} ");
+            if args.verbosity > 0{eprintln!("Starting culling depth {d} ");}
             search::extract_and_cull(&mut bw, d, 0.01, args.verbosity).unwrap();
             bw.free_caches(d as i32);
             search::extract_and_cull_lowcost(&mut bw, d, args.verbosity).unwrap();
         }
-        eprintln!("Finishing up...");
+        if args.verbosity > 0{eprintln!("Finishing up...");}
         search::fill_combinations(
             &mut bw,
             0,
@@ -326,10 +331,10 @@ fn deep_main(
             args.verbosity,
         );
         let nboard = bw.get_num_valid_boards().unwrap();
-        eprintln!("Number of solutions found: {nboard}");
+        if args.verbosity > -1 || gens_left==1 {eprintln!("Number of solutions found: {nboard}");}
 
         if nboard == 0 {
-            eprintln!("Failed, trying bigger....");
+            if args.verbosity > 0 {eprintln!("Failed, trying bigger....");}
             input_num += 1;
             if input_num == current_candidates.len() {
                 if start_side == Direction::Left || border_size % 4 == 0 {
@@ -340,9 +345,9 @@ fn deep_main(
             }
         } else {
             let heatmap = bw.get_all_boards_stats().unwrap();
-            println!("Printing all solutions heatmap:");
-            print_viz_fracs(&heatmap);
-            for i in 0..bw
+            if args.verbosity > -1 {println!("Printing all solutions heatmap:");
+            print_viz_fracs(&heatmap);}
+            if args.verbosity > -1 || gens_left==1 {for i in 0..bw
                 .get_num_valid_boards()
                 .unwrap()
                 .min(n_patterns_to_print_per_gen as u64)
@@ -351,7 +356,7 @@ fn deep_main(
                     "Solution found:\n{}",
                     bw.extract_board(i).unwrap().to_plaintext()
                 )
-            }
+            }}
             bw.build_cost_cache();
             let index_of_best = top_k_indices(
                 &(0..nboard)
