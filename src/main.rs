@@ -53,7 +53,9 @@ enum Mode {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about="Tries to search for a n-gen predecessor, using the given heuristic (default: low population) to choose the best predecessor.")]
+    #[command(
+        about = "Tries to search for a n-gen predecessor, using the given heuristic (default: low population) to choose the best predecessor."
+    )]
     DeepSearch {
         #[arg(short, long, default_value_t = 1)]
         gens: u32,
@@ -70,7 +72,9 @@ enum Commands {
         #[arg(short = 'f', long, default_value_t = 1000000)]
         limit_patterns_finallayer: usize,
     },
-    #[command(about="Tries to search for every 1-gen predecessor, using the given heuristic to sort predecessors.")]
+    #[command(
+        about = "Tries to search for every 1-gen predecessor, using the given heuristic to sort predecessors."
+    )]
     ExhaustiveSearch {
         #[arg(short, long, value_name = "FILE")]
         inputfile: PathBuf,
@@ -217,7 +221,9 @@ fn exhaustive_main(
     bw.fill_leaves(&rule_lut, o_template, input_patt);
 
     for d in (1..=bw.min_leaf_depth()).rev() {
-        if args.verbosity > 0 {eprintln!("Combining to depth {} ", d);}
+        if args.verbosity > 0 {
+            eprintln!("Combining to depth {} ", d);
+        }
         search::fill_combinations(
             &mut bw,
             d,
@@ -225,16 +231,20 @@ fn exhaustive_main(
             args.verbosity,
         );
 
-        if args.verbosity > 0 {eprintln!("Starting culling depth {d} ");}
+        if args.verbosity > 0 {
+            eprintln!("Starting culling depth {d} ");
+        }
         search::extract_and_cull(&mut bw, d, 0.01, args.verbosity).unwrap();
         bw.free_caches(d as i32);
 
         if cull_high_pop {
-            search::extract_and_cull_lowcost(&mut bw, d, args.verbosity).unwrap()
+            search::extract_and_cull_highcost(&mut bw, d, args.verbosity).unwrap()
         };
     }
 
-    if args.verbosity > 0 {eprintln!("Finishing up...");}
+    if args.verbosity > 0 {
+        eprintln!("Finishing up...");
+    }
     search::fill_combinations(
         &mut bw,
         0,
@@ -281,21 +291,24 @@ fn deep_main(
         }
         let curr_patt = curr_patt;
 
-        if args.verbosity > 1 {eprintln!(
-            "Elapsed time: {}s, Gens Left: {gens_left}",
-            SystemTime::now()
-                .duration_since(starttime)
-                .expect("Tenet")
-                .as_secs()
-        );
-        eprintln!(
-            "Dimensions: {}x{}",
-            curr_patt.size.width(),
-            curr_patt.size.height()
-        );
+        if args.verbosity > 1 {
+            eprintln!(
+                "Elapsed time: {}s, Gens Left: {gens_left}",
+                SystemTime::now()
+                    .duration_since(starttime)
+                    .expect("Tenet")
+                    .as_secs()
+            );
+            eprintln!(
+                "Dimensions: {}x{}",
+                curr_patt.size.width(),
+                curr_patt.size.height()
+            );
         }
-        if args.verbosity > 0 {eprintln!("\nParsed Grid:");
-        eprintln!("{}", curr_patt.to_plaintext());}
+        if args.verbosity > 0 {
+            eprintln!("\nParsed Grid:");
+            eprintln!("{}", curr_patt.to_plaintext());
+        }
 
         let mut bw = BoardWindow::new(
             curr_patt.size,
@@ -310,7 +323,9 @@ fn deep_main(
         );
 
         for d in (1..=bw.min_leaf_depth()).rev() {
-            if args.verbosity > 0 { eprintln!("Combining to depth {} ", d);}
+            if args.verbosity > 0 {
+                eprintln!("Combining to depth {} ", d);
+            }
             search::fill_combinations(
                 &mut bw,
                 d,
@@ -318,12 +333,16 @@ fn deep_main(
                 args.verbosity,
             );
 
-            if args.verbosity > 0{eprintln!("Starting culling depth {d} ");}
+            if args.verbosity > 0 {
+                eprintln!("Starting culling depth {d} ");
+            }
             search::extract_and_cull(&mut bw, d, 0.01, args.verbosity).unwrap();
             bw.free_caches(d as i32);
-            search::extract_and_cull_lowcost(&mut bw, d, args.verbosity).unwrap();
+            search::extract_and_cull_highcost(&mut bw, d, args.verbosity).unwrap();
         }
-        if args.verbosity > 0{eprintln!("Finishing up...");}
+        if args.verbosity > 0 {
+            eprintln!("Finishing up...");
+        }
         search::fill_combinations(
             &mut bw,
             0,
@@ -331,10 +350,14 @@ fn deep_main(
             args.verbosity,
         );
         let nboard = bw.get_num_valid_boards().unwrap();
-        if args.verbosity > -1 || gens_left==1 {eprintln!("Number of solutions found: {nboard}");}
+        if args.verbosity > -1 || gens_left == 1 {
+            eprintln!("Number of solutions found: {nboard}");
+        }
 
         if nboard == 0 {
-            if args.verbosity > 0 {eprintln!("Failed, trying bigger....");}
+            if args.verbosity > 0 {
+                eprintln!("Failed, trying bigger....");
+            }
             input_num += 1;
             if input_num == current_candidates.len() {
                 if start_side == Direction::Left || border_size % 4 == 0 {
@@ -345,18 +368,22 @@ fn deep_main(
             }
         } else {
             let heatmap = bw.get_all_boards_stats().unwrap();
-            if args.verbosity > -1 {println!("Printing all solutions heatmap:");
-            print_viz_fracs(&heatmap);}
-            if args.verbosity > -1 || gens_left==1 {for i in 0..bw
-                .get_num_valid_boards()
-                .unwrap()
-                .min(n_patterns_to_print_per_gen as u64)
-            {
-                println!(
-                    "Solution found:\n{}",
-                    bw.extract_board(i).unwrap().to_plaintext()
-                )
-            }}
+            if args.verbosity > -1 {
+                println!("Printing all solutions heatmap:");
+                print_viz_fracs(&heatmap);
+            }
+            if args.verbosity > -1 || gens_left == 1 {
+                for i in 0..bw
+                    .get_num_valid_boards()
+                    .unwrap()
+                    .min(n_patterns_to_print_per_gen as u64)
+                {
+                    println!(
+                        "Solution found:\n{}",
+                        bw.extract_board(i).unwrap().to_plaintext()
+                    )
+                }
+            }
             bw.build_cost_cache();
             let index_of_best = top_k_indices(
                 &(0..nboard)
@@ -365,12 +392,21 @@ fn deep_main(
                     .collect::<Vec<_>>(),
                 2,
             );
-            current_candidates = index_of_best
+            let mut current_candidates_with_cost = index_of_best
                 .iter()
-                .map(|&i| bw.extract_board(i as u64).unwrap().without_border(1))
+                .map(|&i| {
+                    (
+                        bw.get_cost(i as u64).unwrap(),
+                        bw.extract_board(i as u64).unwrap().without_border(1),
+                    )
+                })
+                .collect::<Vec<_>>();
+            current_candidates_with_cost.sort_by_key(|g| g.0);
+
+            current_candidates = current_candidates_with_cost
+                .into_iter()
+                .map(|g| g.1)
                 .collect();
-            current_candidates
-                .sort_by_cached_key(|g| g.data.iter().map(|&c| c.into_u8() as u32).sum::<u32>());
             input_num = 0;
             border_size = 0;
             start_side = Direction::Up;

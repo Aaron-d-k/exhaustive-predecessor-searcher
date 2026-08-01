@@ -59,7 +59,7 @@ def generate_count_pop_cfg(rule_str: str) -> str:
             c_prime = 1 if b_req[neighbors] else 0
 
         # For population count, score is 1 if it becomes alive, else 0
-        score = c_prime
+        score = c
 
         # Output in Golly order: C, N, NE, E, SE, S, SW, W, NW, C' = score
         cfg_lines.append(f"{c},{n},{ne},{e},{se},{s},{sw},{w},{nw},{c_prime}={score}")

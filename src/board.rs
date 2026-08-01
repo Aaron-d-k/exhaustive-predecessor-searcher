@@ -236,9 +236,7 @@ impl BoardWindow {
             let mut cache = vec![PackedCells(0); num_boards as usize];
 
             for i in 0..num_boards {
-                if let Some(exposure) = self.get_exposure(i, direction) {
-                    cache[i as usize] = exposure;
-                }
+                cache[i as usize] = self.get_exposure(i, direction).unwrap();
             }
             self.exposure_cache[direction as usize] = Some(cache);
         }
@@ -606,16 +604,14 @@ impl BoardWindow {
             let mut cache = vec![0; num_boards as usize];
 
             for i in 0..num_boards {
-                if let Some(exposure) = self.get_cost(i) {
-                    cache[i as usize] = exposure;
-                }
+                cache[i as usize] = self.get_cost(i).unwrap();
             }
             self.cost_cache = Some(cache);
         }
     }
 
     // removes all high pop but equivalent
-    pub fn remove_degenerate_lowcost(&mut self) -> Option<()> {
+    pub fn remove_degenerate_highcost(&mut self) -> Option<()> {
         const DIRECS: [Direction; 4] = [
             Direction::Up,
             Direction::Down,
@@ -649,14 +645,15 @@ impl BoardWindow {
             let mut j = i + 1;
             let mut bestidx = i;
             while j < nboard && tosort[j].0 == tosort[i].0 {
-                if pops[bestidx] > pops[j] {
+                if pops[tosort[bestidx].1] > pops[tosort[j].1] {
                     bestidx = j;
                 }
                 j += 1;
             }
-            tokeep[bestidx] = true;
+            tokeep[tosort[bestidx].1] = true;
             i = j;
         }
+
         drop(tosort);
         self.retain_valid_boards(&tokeep);
         Some(())

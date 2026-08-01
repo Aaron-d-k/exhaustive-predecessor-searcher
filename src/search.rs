@@ -10,7 +10,7 @@ fn get_npatt_log<'a>(boards: impl Iterator<Item = &'a BoardWindow>) -> Option<f6
     Some(npatt_log)
 }
 
-pub fn extract_and_cull_lowcost(
+pub fn extract_and_cull_highcost(
     board: &mut BoardWindow,
     depth: usize,
     verbosity: i32,
@@ -18,7 +18,7 @@ pub fn extract_and_cull_lowcost(
     let mut g = board.extract_grid_at_depth(depth)?;
     g.data
         .par_iter_mut()
-        .try_for_each(|b| b.remove_degenerate_lowcost())?;
+        .try_for_each(|b| b.remove_degenerate_highcost())?;
     if verbosity > 0 {
         eprintln!(
             "New log_10(patterns) after culling highpop duplicates -- {}",
@@ -475,12 +475,223 @@ pub mod exhaustive {
 
         let mut targets: Vec<u32> = truth.keys().copied().collect();
         targets.sort_unstable();
-        for (i, t) in targets.iter().enumerate() {
-            let expected: HashSet<u32> = truth[t].iter().copied().collect();
-            assert_exhaustive(&rule, *t, &expected);
-            if i % 500 == 0 {
-                eprintln!("  {}/{} targets ok", i, targets.len());
+        targets
+            .par_iter()
+            .enumerate()
+            .panic_fuse()
+            .for_each(|(i, t)| {
+                let expected: HashSet<u32> = truth[t].iter().copied().collect();
+                assert_exhaustive(&rule, *t, &expected);
+                if i % 500 == 0 {
+                    eprintln!("  {}/{} targets ok", i, targets.len());
+                }
+            });
+    }
+
+    /// Run the real quadtree search on `target` with both regular culling and
+    /// high-population culling (`extract_and_cull_highcost`) enabled.
+    pub fn search_predecessors_highpop(rule: &RuleLut, target: u32) -> HashSet<u32> {
+        let grid = target_grid(target);
+        let mut bw = BoardWindow::new(
+            grid.size,
+            Directions::all(),
+            grid.size.height() as f32,
+            grid.size.width() as f32,
+        );
+        bw.fill_leaves(
+            &rule,
+            &Grid::from_rect(bw.rect, None),
+            &grid.map(|&x| Some(x)),
+        );
+
+        for d in (1..=bw.min_leaf_depth()).rev() {
+            fill_combinations(&mut bw, d, &CombinerCfg::Exhaustive, 0);
+            extract_and_cull(&mut bw, d, 0.0, 0).unwrap();
+            bw.free_caches(d as i32);
+            extract_and_cull_highcost(&mut bw, d, 0).unwrap();
+        }
+
+        fill_combinations(&mut bw, 0, &CombinerCfg::Exhaustive, 0);
+
+        let n = bw.get_num_valid_boards().unwrap();
+        let mut out = HashSet::with_capacity(n as usize);
+        for i in 0..n {
+            out.insert(grid_to_u32(&bw.extract_board(i).unwrap()));
+        }
+        out
+    }
+
+    /// Assert that `cull_high_pop` is sound, preserves solution existence,
+    /// and preserves the minimum population solution.
+    fn assert_cull_high_pop(target: u32, expected: &HashSet<u32>, found: &HashSet<u32>) {
+        // 1. Soundness: no invalid predecessors introduced
+        if !found.is_subset(expected) {
+            let extra: Vec<u32> = found.difference(expected).copied().collect();
+            panic!(
+                "target {:#027b}: high-pop cull produced {} INVALID extra predecessors\n  extra: {:?}",
+                target,
+                extra.len(),
+                extra.iter().take(8).collect::<Vec<_>>(),
+            );
+        }
+
+        // 2. Existence: if any predecessor exists, at least one must survive
+        if !expected.is_empty() && found.is_empty() {
+            panic!(
+                "target {:#027b}: high-pop cull eliminated ALL {} valid predecessors!",
+                target,
+                expected.len(),
+            );
+        }
+
+        // 3. Min-cost preservation: lowest population predecessor must not be pruned
+        if !expected.is_empty() {
+            let expected_min_pop = expected.iter().map(|p| p.count_ones()).min().unwrap();
+            let found_min_pop = found.iter().map(|p| p.count_ones()).min().unwrap();
+            assert_eq!(
+                found_min_pop, expected_min_pop,
+                "target {:#027b}: high-pop cull failed to preserve minimum population (expected min {}, got {})",
+                target, expected_min_pop, found_min_pop
+            );
+        }
+    }
+
+    /// Sample test for high-population culling across a diverse set of targets.
+    #[test]
+    fn exhaustive_5x5_sample_highpop() {
+        let rule = RuleLut::cost_as_population_from_rule("B3S23");
+        let truth = build_ground_truth(&rule);
+        assert!(!truth.is_empty(), "ground truth should be non-empty");
+
+        let sample: usize = std::env::var("EXHAUSTIVE_SAMPLE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(40);
+
+        let mut big = Vec::new();
+        let mut small = Vec::new();
+        for &t in truth.keys() {
+            let (w, h) = bbox(t);
+            if w >= N || h >= N {
+                big.push(t);
+            } else {
+                small.push(t);
             }
+        }
+        big.sort_unstable();
+        small.sort_unstable();
+
+        let stride_take = |v: &[u32], k: usize| -> Vec<u32> {
+            if v.is_empty() || k == 0 {
+                return Vec::new();
+            }
+            let k = k.min(v.len());
+            let step = (v.len() / k).max(1);
+            (0..k).map(|i| v[i * step]).collect()
+        };
+
+        let half = sample / 2;
+        let mut picks = stride_take(&big, half);
+        picks.extend(stride_take(&small, sample - half));
+
+        for t in picks {
+            let expected: HashSet<u32> = truth[&t].iter().copied().collect();
+            let found = search_predecessors_highpop(&rule, t);
+            assert_cull_high_pop(t, &expected, &found);
+        }
+    }
+
+    /// Heavy full-sweep test for high-pop culling across all achievable 5x5 targets.
+    /// Run explicitly with:
+    ///   cargo test --release exhaustive_5x5_all_highpop -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn exhaustive_5x5_all_highpop() {
+        let rule = RuleLut::cost_as_population_from_rule("B3S23");
+        let truth = build_ground_truth(&rule);
+        eprintln!(
+            "verifying high-pop cull on all {} achievable targets",
+            truth.len()
+        );
+
+        let mut targets: Vec<u32> = truth.keys().copied().collect();
+        targets.sort_unstable();
+        targets
+            .par_iter()
+            .enumerate()
+            .panic_fuse()
+            .for_each(|(i, t)| {
+                let expected: HashSet<u32> = truth[t].iter().copied().collect();
+                let found = search_predecessors_highpop(&rule, *t);
+                assert_cull_high_pop(*t, &expected, &found);
+                if i % 500 == 0 {
+                    eprintln!("  {}/{} targets ok (highpop)", i, targets.len());
+                }
+            });
+    }
+
+    /// Assert that `bw.get_pop(i).unwrap()` matches the actual number of live
+    /// cells in `bw.extract_board(i).unwrap()` for every valid board index `i`.
+    fn assert_get_pop_correct(bw: &mut BoardWindow) {
+        let n = bw.get_num_valid_boards().unwrap();
+        for i in 0..n {
+            let reported_pop = bw.get_cost(i).unwrap() as u32;
+            let extracted_grid = bw.extract_board(i).unwrap();
+            let actual_pop = grid_to_u32(&extracted_grid).count_ones();
+            assert_eq!(
+                reported_pop, actual_pop,
+                "board index {}: get_pop() returned {}, but extracted board has {} live cells",
+                i, reported_pop, actual_pop
+            );
+        }
+    }
+
+    /// Verifies that `get_pop(i)` correctly reports the exact population of the
+    /// extracted board across a sample of 5x5 targets.
+    #[test]
+    fn test_get_pop_correctness() {
+        let rule = RuleLut::cost_as_population_from_rule("B3S23");
+        let truth = build_ground_truth(&rule);
+        assert!(!truth.is_empty(), "ground truth should be non-empty");
+
+        let sample: usize = std::env::var("EXHAUSTIVE_SAMPLE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(40);
+
+        // Sample across sorted targets to cover diverse pattern densities
+        let mut targets: Vec<u32> = truth.keys().copied().collect();
+        targets.sort_unstable();
+
+        let step = (targets.len() / sample.min(targets.len())).max(1);
+        let picks: Vec<u32> = (0..sample.min(targets.len()))
+            .map(|i| targets[i * step])
+            .collect();
+
+        for t in picks {
+            let grid = target_grid(t);
+            let mut bw = BoardWindow::new(
+                grid.size,
+                Directions::all(),
+                grid.size.height() as f32,
+                grid.size.width() as f32,
+            );
+            bw.fill_leaves(
+                &rule,
+                &Grid::from_rect(bw.rect, None),
+                &grid.map(|&x| Some(x)),
+            );
+
+            for d in (1..=bw.min_leaf_depth()).rev() {
+                fill_combinations(&mut bw, d, &CombinerCfg::Exhaustive, 0);
+                extract_and_cull(&mut bw, d, 0.0, 0).unwrap();
+                bw.free_caches(d as i32);
+            }
+
+            fill_combinations(&mut bw, 0, &CombinerCfg::Exhaustive, 0);
+
+            // Assert get_pop(i) matches live cell count for all predecessors
+            assert_get_pop_correct(&mut bw);
         }
     }
 }

@@ -127,8 +127,7 @@ impl RuleLut {
                 if b_req[neighbors as usize] { 1 } else { 0 }
             };
 
-            // For population count, score is 1 if it becomes alive, else 0
-            let score = c_prime;
+            let score = c as i32;
 
             // Output in Golly order: C, N, NE, E, SE, S, SW, W, NW, C' = score
             cfg.push_str(&format!(
